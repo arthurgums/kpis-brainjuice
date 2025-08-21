@@ -5,14 +5,10 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>KPI • Gráficos de Métricas</title>
 
-  <!-- Tailwind (CDN) -->
   <script src="https://cdn.tailwindcss.com"></script>
-
-  <!-- Chart.js & PapaParse -->
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
 
-  <!-- Fonte -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -34,6 +30,7 @@
       display:inline-flex; align-items:center; gap:.5rem;
       font-size:.875rem; padding:.375rem .75rem; border-radius:9999px;
       border:1px solid rgba(203,213,225,0.7); background: rgba(255,255,255,0.7);
+      cursor: pointer;
     }
     @media (prefers-color-scheme: dark){
       .chip{ border-color:#334155; background: rgba(2,6,23,0.7); }
@@ -50,6 +47,11 @@
       <div class="flex items-center gap-2">
         <a href="index.html" class="chip">← Voltar ao relatório</a>
         <a class="chip" href="data/kpis.csv">Abrir kpis.csv</a>
+        <!-- Fallback (quando CSV não carrega via fetch) -->
+        <label class="chip">
+          <input id="file-input" type="file" accept=".csv" class="hidden">
+          Carregar CSV local
+        </label>
       </div>
     </div>
   </header>
@@ -98,13 +100,15 @@
       formatByKind,
       findMetricLabel,
       listWeeksAsc,
-      brNumber
+      brNumber,
+      parseCsv
     } from './assets/kpi-core.js';
 
     const metricGroupsHost = document.getElementById('metric-groups');
     const ctx = document.getElementById('kpiChart');
     const dateFromEl = document.getElementById('date-from');
     const dateToEl   = document.getElementById('date-to');
+    const fileInput  = document.getElementById('file-input');
 
     let RAW_ROWS = [];
     let FILTERED_ROWS = [];
@@ -195,7 +199,6 @@
       updateChart();
     });
     document.getElementById('btn-select-fin').addEventListener('click', () => {
-      // Primeiro group (Financeiro) abre/seleciona
       const first = document.querySelector('#metric-groups details');
       if(first) first.querySelectorAll('input[type="checkbox"]').forEach(el=> el.checked=true);
       updateChart();
@@ -208,17 +211,33 @@
     });
     document.getElementById('btn-apply-range').addEventListener('click', applyDateRange);
 
+    // Fallback: upload de CSV local
+    if (fileInput){
+      fileInput.addEventListener('change', (e)=>{
+        const file = e.target.files?.[0];
+        if(!file) return;
+        const reader = new FileReader();
+        reader.onload = () => {
+          const text = String(reader.result || '');
+          const cleaned = parseCsv(text);
+          RAW_ROWS = cleaned;
+          FILTERED_ROWS = [...RAW_ROWS];
+          updateChart();
+        };
+        reader.readAsText(file, 'utf-8');
+      });
+    }
+
     (async function init(){
       mountMetricCheckboxes();
       try{
         RAW_ROWS = await loadCsv(DEFAULT_CSV_URL);
+        FILTERED_ROWS = [...RAW_ROWS];
+        updateChart();
       }catch(err){
-        console.error(err);
-        document.body.insertAdjacentHTML('beforeend', '<div class="max-w-3xl mx-auto p-4 text-sm text-red-600">Erro ao carregar data/kpis.csv.</div>');
-        return;
+        console.warn('Falha no fetch do CSV (provável file://):', err);
+        // deixa o usuário usar o botão "Carregar CSV local"
       }
-      FILTERED_ROWS = [...RAW_ROWS];
-      updateChart();
     })();
   </script>
 </body>

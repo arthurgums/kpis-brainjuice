@@ -17,30 +17,26 @@
     :root{ color-scheme: light dark; }
     body{ font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial; }
 
-    /* Utilitários próprios (sem @apply) */
     .card{
       border-radius: 16px;
-      border: 1px solid rgba(203,213,225,0.7); /* slate-200 */
+      border: 1px solid rgba(203,213,225,0.7);
       background: rgba(255,255,255,0.9);
       box-shadow: 0 1px 2px rgba(0,0,0,0.04);
       backdrop-filter: saturate(1.1) blur(2px);
     }
     @media (prefers-color-scheme: dark){
-      .card{
-        border-color: #0f172a; /* slate-900-ish */
-        background: rgba(2,6,23,0.8); /* slate-950 */
-      }
+      .card{ border-color:#334155; background: rgba(2,6,23,0.8); }
     }
 
     .chip{
       display:inline-flex; align-items:center; gap:.5rem;
       font-size:.875rem; padding:.375rem .75rem; border-radius:9999px;
       border:1px solid rgba(203,213,225,0.7); background: rgba(255,255,255,0.7);
+      cursor: pointer;
     }
     @media (prefers-color-scheme: dark){
       .chip{ border-color:#334155; background: rgba(2,6,23,0.7); }
     }
-
     .tabs::-webkit-scrollbar{ height:8px }
     .tabs::-webkit-scrollbar-thumb{ background:#cbd5e1; border-radius:9999px }
     .chip.is-active{ border-color:#0ea5e9; background:rgba(14,165,233,.1); }
@@ -71,6 +67,16 @@
         <span id="latest-week" class="text-xs text-slate-500"></span>
       </div>
       <div id="week-tabs" class="tabs flex gap-2 overflow-x-auto pb-2"></div>
+
+      <!-- FALLBACK quando fetch do CSV falhar (file://) -->
+      <div id="fallback" class="hidden mt-4 text-sm text-slate-400">
+        Não consegui carregar <code>data/kpis.csv</code> diretamente.
+        <label class="chip ml-2">
+          <input id="file-input" type="file" accept=".csv" class="hidden">
+          Carregar CSV local
+        </label>
+        <span class="ml-2">ou rode um servidor local (ex.: <code>python -m http.server</code>).</span>
+      </div>
     </section>
 
     <!-- Painel da semana selecionada -->
@@ -91,10 +97,12 @@
       ymd
     } from './assets/kpi-core.js';
 
-    const weekTabs   = document.getElementById('week-tabs');
-    const weekPanel  = document.getElementById('week-panel');
-    const periodoTip = document.getElementById('periodo-tip');
-    const latestWeekEl = document.getElementById('latest-week');
+    const weekTabs      = document.getElementById('week-tabs');
+    const weekPanel     = document.getElementById('week-panel');
+    const periodoTip    = document.getElementById('periodo-tip');
+    const latestWeekEl  = document.getElementById('latest-week');
+    const fallbackBox   = document.getElementById('fallback');
+    const fileInput     = document.getElementById('file-input');
 
     let ROWS = [];
     let WEEKS = [];
@@ -172,17 +180,45 @@
       weekPanel.innerHTML = sections.join('\n');
     }
 
-    (async function init(){
-      try{
-        ROWS = await loadCsv(DEFAULT_CSV_URL);
-      }catch(err){
-        console.error(err);
-        document.body.insertAdjacentHTML('beforeend', '<div class="max-w-3xl mx-auto p-4 text-sm text-red-600">Erro ao carregar data/kpis.csv. Verifique o caminho.</div>');
+    function hydrate(rows){
+      ROWS = rows;
+      WEEKS = listWeeksAsc(ROWS);
+      if(!WEEKS.length){
+        weekPanel.innerHTML = '<div class="text-sm text-slate-500">Seu CSV está sem linhas. Adicione pelo menos uma semana.</div>';
         return;
       }
-      WEEKS = listWeeksAsc(ROWS);
       buildTabs();
       selectWeek(WEEKS[WEEKS.length-1]); // mais recente
+    }
+
+    // Fallback: upload de CSV local
+    if (fileInput){
+      fileInput.addEventListener('change', (e)=>{
+        const file = e.target.files?.[0];
+        if(!file) return;
+        const reader = new FileReader();
+        reader.onload = () => {
+          const text = String(reader.result || '');
+          // usar parseCsv do módulo compartilhado
+          const rows = window.Papa.parse(text, {header:true, skipEmptyLines:true}).data.map(r => ({...r}));
+          import('./assets/kpi-core.js').then(mod => {
+            const cleaned = mod.parseCsv(text);
+            hydrate(cleaned);
+            fallbackBox.classList.add('hidden');
+          });
+        };
+        reader.readAsText(file, 'utf-8');
+      });
+    }
+
+    (async function init(){
+      try{
+        const data = await loadCsv(DEFAULT_CSV_URL);
+        hydrate(data);
+      }catch(err){
+        console.warn('Falha no fetch do CSV (provável file://):', err);
+        fallbackBox.classList.remove('hidden');
+      }
     })();
   </script>
 </body>
