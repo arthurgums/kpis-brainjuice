@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>KPI • Gráficos de Métricas</title>
+
+  <!-- Tailwind (CDN) -->
+  <script src="https://cdn.tailwindcss.com"></script>
+
+  <!-- Chart.js & PapaParse -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
+
+  <!-- Fonte -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+
+  <style>
+    :root{ color-scheme: light dark; }
+    body{ font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial; }
+    .card{
+      border-radius: 16px;
+      border: 1px solid rgba(203,213,225,0.7);
+      background: rgba(255,255,255,0.9);
+      box-shadow: 0 1px 2px rgba(0,0,0,0.04);
+      backdrop-filter: saturate(1.1) blur(2px);
+    }
+    @media (prefers-color-scheme: dark){
+      .card{ border-color:#334155; background: rgba(2,6,23,0.8); }
+    }
+    .chip{
+      display:inline-flex; align-items:center; gap:.5rem;
+      font-size:.875rem; padding:.375rem .75rem; border-radius:9999px;
+      border:1px solid rgba(203,213,225,0.7); background: rgba(255,255,255,0.7);
+    }
+    @media (prefers-color-scheme: dark){
+      .chip{ border-color:#334155; background: rgba(2,6,23,0.7); }
+    }
+  </style>
+</head>
+<body class="bg-slate-50 text-slate-900 dark:bg-slate-950 dark:text-slate-100">
+  <header class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
+    <div class="flex flex-col md:flex-row md:items-end md:justify-between gap-4">
+      <div>
+        <h1 class="text-2xl md:text-3xl font-bold tracking-tight">Gráficos de Métricas</h1>
+        <p class="text-slate-600 dark:text-slate-400 mt-1">Selecione 1+ métricas para acompanhar ao longo das semanas. Fonte: <code>data/kpis.csv</code>.</p>
+      </div>
+      <div class="flex items-center gap-2">
+        <a href="index.html" class="chip">← Voltar ao relatório</a>
+        <a class="chip" href="data/kpis.csv">Abrir kpis.csv</a>
+      </div>
+    </div>
+  </header>
+
+  <main class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pb-24">
+    <section class="card p-4 sm:p-6 mb-6">
+      <div class="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
+        <div class="flex-1">
+          <div class="flex items-center gap-2 mb-2">
+            <h2 class="text-lg font-semibold">Seleção de métricas</h2>
+            <span class="text-xs text-slate-500">(clique para marcar)</span>
+          </div>
+          <div class="flex flex-wrap gap-2 text-sm">
+            <button id="btn-clear" class="chip">Limpar seleção</button>
+            <button id="btn-select-fin" class="chip">Selecionar Financeiro</button>
+            <button id="btn-select-tra" class="chip">Selecionar Tráfego</button>
+          </div>
+        </div>
+        <div class="flex flex-col items-start gap-2">
+          <label class="text-sm">Filtrar por intervalo (opcional)</label>
+          <div class="flex items-center gap-2">
+            <input id="date-from" type="date" class="px-3 py-2 rounded-xl bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700"/>
+            <span class="text-slate-400">—</span>
+            <input id="date-to" type="date" class="px-3 py-2 rounded-xl bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700"/>
+            <button id="btn-apply-range" class="chip">Aplicar</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="grid grid-cols-1 lg:grid-cols-12 gap-6 mt-6">
+        <aside class="lg:col-span-4 space-y-4" id="metric-groups"></aside>
+
+        <div class="lg:col-span-8 card p-4 flex flex-col gap-3">
+          <canvas id="kpiChart" height="260"></canvas>
+          <p class="text-xs text-slate-500">Passe o mouse para ver valores. Valores monetários em BRL.</p>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <script type="module">
+    import {
+      METRIC_GROUPS,
+      DEFAULT_CSV_URL,
+      loadCsv,
+      formatByKind,
+      findMetricLabel,
+      listWeeksAsc,
+      brNumber
+    } from './assets/kpi-core.js';
+
+    const metricGroupsHost = document.getElementById('metric-groups');
+    const ctx = document.getElementById('kpiChart');
+    const dateFromEl = document.getElementById('date-from');
+    const dateToEl   = document.getElementById('date-to');
+
+    let RAW_ROWS = [];
+    let FILTERED_ROWS = [];
+    let chartInstance = null;
+
+    function mountMetricCheckboxes(){
+      metricGroupsHost.innerHTML = '';
+      for(const [groupName, metrics] of Object.entries(METRIC_GROUPS)){
+        const details = document.createElement('details');
+        details.className = 'card p-4';
+        details.open = groupName === 'Financeiro';
+
+        const summary = document.createElement('summary');
+        summary.className = 'cursor-pointer font-semibold';
+        summary.textContent = groupName;
+
+        const grid = document.createElement('div');
+        grid.className = 'mt-3 grid grid-cols-1 sm:grid-cols-2 gap-2 text-sm';
+        metrics.forEach(m => {
+          const label = document.createElement('label');
+          label.className = 'inline-flex items-center gap-2';
+          label.innerHTML = `<input type="checkbox" class="metric-ck" data-key="${m.key}" data-kind="${m.kind}"> <span>${m.label}</span>`;
+          grid.appendChild(label);
+        });
+
+        details.appendChild(summary);
+        details.appendChild(grid);
+        metricGroupsHost.appendChild(details);
+      }
+    }
+
+    function selectedMetricKeys(){
+      return Array.from(document.querySelectorAll('.metric-ck:checked')).map(el => ({key:el.dataset.key, kind:el.dataset.kind}));
+    }
+
+    function updateChart(){
+      const labels = FILTERED_ROWS.map(r => r.week_ending);
+      const sel = selectedMetricKeys();
+      const datasets = sel.map((m) => ({
+        label: findMetricLabel(m.key),
+        data: FILTERED_ROWS.map(r => r[m.key] ?? null),
+        tension: 0.25,
+        borderWidth: 2,
+        pointRadius: 2,
+        spanGaps: true,
+      }));
+
+      const tooltip = {
+        callbacks: {
+          label: function(ctx){
+            const {raw} = ctx;
+            const metricKey = sel[ctx.datasetIndex]?.key;
+            const kind = sel[ctx.datasetIndex]?.kind || 'count';
+            const label = ctx.dataset.label || metricKey;
+            return `${label}: ${formatByKind(kind, raw)}`;
+          }
+        }
+      };
+
+      const scales = {
+        x: { ticks: { maxRotation: 0, autoSkip: true, autoSkipPadding: 12 }, grid: { display:false } },
+        y: { ticks: { callback:(v)=> brNumber.format(v) }, grid: { color: 'rgba(148,163,184,0.2)' } }
+      };
+
+      if(chartInstance){ chartInstance.destroy(); }
+      chartInstance = new Chart(ctx, { type:'line', data:{ labels, datasets }, options:{
+        responsive:true,
+        interaction:{ mode:'nearest', intersect:false },
+        plugins:{ legend:{ position:'bottom' }, tooltip },
+        scales
+      }});
+    }
+
+    function applyDateRange(){
+      const from = dateFromEl.value;
+      const to   = dateToEl.value;
+      FILTERED_ROWS = RAW_ROWS.filter(r => {
+        if(from && r.week_ending < from) return false;
+        if(to   && r.week_ending > to  ) return false;
+        return true;
+      });
+      updateChart();
+    }
+
+    document.addEventListener('change', e => { if(e.target.classList.contains('metric-ck')) updateChart(); });
+    document.getElementById('btn-clear').addEventListener('click', () => {
+      document.querySelectorAll('.metric-ck').forEach(el=> el.checked=false);
+      updateChart();
+    });
+    document.getElementById('btn-select-fin').addEventListener('click', () => {
+      // Primeiro group (Financeiro) abre/seleciona
+      const first = document.querySelector('#metric-groups details');
+      if(first) first.querySelectorAll('input[type="checkbox"]').forEach(el=> el.checked=true);
+      updateChart();
+    });
+    document.getElementById('btn-select-tra').addEventListener('click', () => {
+      const details = Array.from(document.querySelectorAll('#metric-groups details'));
+      const traf = details.find(d => d.querySelector('summary')?.textContent === 'Tráfego');
+      if(traf) traf.querySelectorAll('input[type="checkbox"]').forEach(el=> el.checked=true);
+      updateChart();
+    });
+    document.getElementById('btn-apply-range').addEventListener('click', applyDateRange);
+
+    (async function init(){
+      mountMetricCheckboxes();
+      try{
+        RAW_ROWS = await loadCsv(DEFAULT_CSV_URL);
+      }catch(err){
+        console.error(err);
+        document.body.insertAdjacentHTML('beforeend', '<div class="max-w-3xl mx-auto p-4 text-sm text-red-600">Erro ao carregar data/kpis.csv.</div>');
+        return;
+      }
+      FILTERED_ROWS = [...RAW_ROWS];
+      updateChart();
+    })();
+  </script>
+</body>
+</html>

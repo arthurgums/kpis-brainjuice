@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>KPI • Relatório Semanal</title>
+
+  <!-- Tailwind (CDN) -->
+  <script src="https://cdn.tailwindcss.com"></script>
+
+  <!-- Fonte -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+
+  <style>
+    :root{ color-scheme: light dark; }
+    body{ font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial; }
+
+    /* Utilitários próprios (sem @apply) */
+    .card{
+      border-radius: 16px;
+      border: 1px solid rgba(203,213,225,0.7); /* slate-200 */
+      background: rgba(255,255,255,0.9);
+      box-shadow: 0 1px 2px rgba(0,0,0,0.04);
+      backdrop-filter: saturate(1.1) blur(2px);
+    }
+    @media (prefers-color-scheme: dark){
+      .card{
+        border-color: #0f172a; /* slate-900-ish */
+        background: rgba(2,6,23,0.8); /* slate-950 */
+      }
+    }
+
+    .chip{
+      display:inline-flex; align-items:center; gap:.5rem;
+      font-size:.875rem; padding:.375rem .75rem; border-radius:9999px;
+      border:1px solid rgba(203,213,225,0.7); background: rgba(255,255,255,0.7);
+    }
+    @media (prefers-color-scheme: dark){
+      .chip{ border-color:#334155; background: rgba(2,6,23,0.7); }
+    }
+
+    .tabs::-webkit-scrollbar{ height:8px }
+    .tabs::-webkit-scrollbar-thumb{ background:#cbd5e1; border-radius:9999px }
+    .chip.is-active{ border-color:#0ea5e9; background:rgba(14,165,233,.1); }
+  </style>
+</head>
+<body class="bg-slate-50 text-slate-900 dark:bg-slate-950 dark:text-slate-100">
+  <header class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
+    <div class="flex flex-col md:flex-row md:items-end md:justify-between gap-4">
+      <div>
+        <h1 class="text-2xl md:text-3xl font-bold tracking-tight">Relatório Semanal de KPIs</h1>
+        <p class="text-slate-600 dark:text-slate-400 mt-1">
+          Página principal: mostra a <strong>semana mais recente</strong>. Use as <strong>abas</strong> para ver semanas anteriores.
+        </p>
+        <p id="periodo-tip" class="text-xs text-slate-500 mt-1"></p>
+      </div>
+      <div class="flex items-center gap-2">
+        <a href="metrics.html" class="chip">Ver gráficos de métricas →</a>
+        <a class="chip" href="data/kpis.csv">Abrir kpis.csv</a>
+      </div>
+    </div>
+  </header>
+
+  <main class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pb-24">
+    <!-- Abas de semanas -->
+    <section class="card p-4 sm:p-6 mb-6">
+      <div class="flex items-center justify-between mb-3">
+        <h2 class="text-lg font-semibold">Semanas</h2>
+        <span id="latest-week" class="text-xs text-slate-500"></span>
+      </div>
+      <div id="week-tabs" class="tabs flex gap-2 overflow-x-auto pb-2"></div>
+    </section>
+
+    <!-- Painel da semana selecionada -->
+    <section id="week-panel" class="space-y-6"></section>
+  </main>
+
+  <!-- PapaParse para CSV -->
+  <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
+
+  <!-- Lógica da página -->
+  <script type="module">
+    import {
+      METRIC_GROUPS,
+      DEFAULT_CSV_URL,
+      loadCsv,
+      formatByKind,
+      listWeeksAsc,
+      ymd
+    } from './assets/kpi-core.js';
+
+    const weekTabs   = document.getElementById('week-tabs');
+    const weekPanel  = document.getElementById('week-panel');
+    const periodoTip = document.getElementById('periodo-tip');
+    const latestWeekEl = document.getElementById('latest-week');
+
+    let ROWS = [];
+    let WEEKS = [];
+    let CUR_WEEK = null;
+
+    function dtFromYmd(s){ return new Date(s+'T00:00:00'); }
+    function subDays(d, n){ const x=new Date(d); x.setDate(x.getDate()-n); return x; }
+
+    function weekPeriodString(week){
+      // período: sexta anterior até quinta (week)
+      const dThu = dtFromYmd(week);
+      const dFri = subDays(dThu, 6);
+      return `${ymd(dFri)} (sex) — ${ymd(dThu)} (qui)`;
+    }
+
+    function buildTabs(){
+      weekTabs.innerHTML = '';
+      const frag = document.createDocumentFragment();
+      const weeksDesc = [...WEEKS].reverse();
+      weeksDesc.forEach(week => {
+        const btn = document.createElement('button');
+        btn.className = 'chip whitespace-nowrap';
+        btn.textContent = week;
+        btn.dataset.week = week;
+        btn.addEventListener('click', ()=> selectWeek(week));
+        frag.appendChild(btn);
+      });
+      weekTabs.appendChild(frag);
+      highlightActiveTab();
+    }
+
+    function selectWeek(week){
+      CUR_WEEK = week;
+      renderWeek();
+      highlightActiveTab();
+    }
+
+    function highlightActiveTab(){
+      weekTabs.querySelectorAll('button').forEach(b => {
+        b.classList.toggle('is-active', b.dataset.week === CUR_WEEK);
+      });
+    }
+
+    function renderWeek(){
+      const row = ROWS.find(r => r.week_ending === CUR_WEEK);
+      if(!row){
+        weekPanel.innerHTML = '<div class="text-sm text-slate-500">Sem dados para esta semana.</div>';
+        return;
+      }
+
+      latestWeekEl.textContent = `Mais recente: ${WEEKS[WEEKS.length-1]} · Período ${weekPeriodString(WEEKS[WEEKS.length-1])}`;
+      periodoTip.textContent   = `Semana selecionada (${CUR_WEEK}) cobre: ${weekPeriodString(CUR_WEEK)}.`;
+
+      const sections = [];
+      for(const [groupName, metrics] of Object.entries(METRIC_GROUPS)){
+        const cards = metrics.map(m => {
+          const val = row[m.key] ?? null;
+          const pretty = formatByKind(m.kind, val);
+          return `
+            <div class="card p-4">
+              <div class="text-xs text-slate-500">${groupName}</div>
+              <div class="text-sm font-medium">${m.label}</div>
+              <div class="text-2xl mt-1">${pretty || '—'}</div>
+            </div>`;
+        }).join('');
+
+        sections.push(`
+          <section class="space-y-3">
+            <h3 class="text-base font-semibold">${groupName}</h3>
+            <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">${cards}</div>
+          </section>
+        `);
+      }
+
+      weekPanel.innerHTML = sections.join('\n');
+    }
+
+    (async function init(){
+      try{
+        ROWS = await loadCsv(DEFAULT_CSV_URL);
+      }catch(err){
+        console.error(err);
+        document.body.insertAdjacentHTML('beforeend', '<div class="max-w-3xl mx-auto p-4 text-sm text-red-600">Erro ao carregar data/kpis.csv. Verifique o caminho.</div>');
+        return;
+      }
+      WEEKS = listWeeksAsc(ROWS);
+      buildTabs();
+      selectWeek(WEEKS[WEEKS.length-1]); // mais recente
+    })();
+  </script>
+</body>
+</html>
